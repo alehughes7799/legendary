@@ -7,7 +7,7 @@
 | --- | --- | --- |
 | Linux | `desktop/scripts/build-linux.sh` | `.deb`、`.AppImage` |
 | macOS | `desktop/scripts/build-macos.sh` | `Legendary.app`、`.dmg` |
-| Windows | `desktop/scripts/build-windows.ps1` | NSIS 安装程序 `.exe`、WiX 安装包 `.msi` |
+| Windows | `desktop/scripts/build-windows.ps1` | 单文件便携版 `.exe`、NSIS 安装程序 `.exe`、WiX 安装包 `.msi` |
 
 所有脚本都按 **Rust 本机工具链的架构**编译，并检查 Python 的系统、架构和位数是否匹配。
 例如 Apple Silicon 使用 `aarch64-apple-darwin`，Intel Mac 使用
@@ -141,9 +141,37 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\scripts\build-wind
 ```text
 desktop\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*-setup.exe
 desktop\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi\*.msi
+desktop\src-tauri\target\x86_64-pc-windows-msvc\release\portable\Legendary_<版本>_x86_64_portable.exe
 ```
 
-Windows 安装包的代码签名需另外配置。打包工具默认按 Tauri 配置处理 WebView2。
+只生成单文件便携版、不生成安装器：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\desktop\scripts\build-windows.ps1 -PortableOnly
+# 依赖已安装时可同时添加 -SkipDependencies
+```
+
+便携版只需携带 `Legendary_<版本>_x86_64_portable.exe`，无需同目录的
+`legendary-sidecar.exe`，无需安装 Python。构建仍会先生成与本机架构一致的
+PyInstaller sidecar，再通过 `embedded-sidecar` Cargo feature 嵌入桌面程序。
+Windows 平台配置也对 NSIS/MSI 使用同一内嵌方式，避免重复携带后端文件。
+
+首次启动会把后端释放到：
+
+```text
+%LOCALAPPDATA%\gl.legendary.desktop\backend\<Rust目标架构>\<SHA256>\legendary-sidecar.exe
+```
+
+之后每次连接后端都会校验缓存，内容匹配时复用，缺失或损坏时原子替换。
+多进程共用缓存时使用文件锁；新旧后端使用不同哈希目录，更新不会覆盖仍在运行的
+旧后端。旧缓存不自动删除，可在应用及其下载任务退出后手动清理 `backend` 目录，
+下次启动会重新释放。游戏目录、登录和安装记录仍沿用 Legendary 的配置规则，
+“便携版”仅指可执行文件分发形式，不把用户数据迁入 EXE 所在目录。
+
+运行时仍有后端子进程和 PyInstaller 的临时解包文件。缓存目录需有写入空间；
+Windows 便携版依赖已安装的 WebView2，安装包则按 Tauri 配置处理 WebView2。
+Windows 安装包和便携版的代码签名需另外配置；便携 EXE 可在生成后单独签名，
+签名后需重新生成其校验文件。此实现不会把 Windows 服务二进制用于 Linux/macOS。
 
 ## 重复构建
 
@@ -163,6 +191,7 @@ $env:LEGENDARY_DESKTOP_PYTHON = 'C:\absolute\path\to\python.exe'
 不提供变量时使用仓库的 `.venv`。自建环境需要 Python 3.10–3.13、项目依赖和
 PyInstaller。脚本会从任意当前目录定位仓库，并传递现有代理、签名、Cargo
 配置等环境设置。自定义 `CARGO_TARGET_DIR` 时，产物位于其下的
-`<Rust host triple>/release/bundle/`。
+`<Rust host triple>/release/bundle/`，Windows 便携版位于同级的 `portable/`。
+Windows 脚本中的相对 `CARGO_TARGET_DIR` 按 `desktop/src-tauri` 解析，建议使用绝对路径。
 
 查看帮助：Linux/macOS 使用 `--help`，Windows 使用 `-Help`。

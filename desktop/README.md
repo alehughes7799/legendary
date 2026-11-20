@@ -97,9 +97,13 @@ of GTK/WebView libraries. The application itself requires those native libraries
 Native build scripts for Linux, macOS, and Windows, including prerequisites,
 commands, and output locations, are documented in [BUILDING.md](BUILDING.md).
 
-`pnpm desktop:build` creates a PyInstaller onefile executable and adds it to
-Tauri's `bundle.externalBin`. Sidecar filenames include the Rust host target
-triple. Build separately on each target OS and architecture; there is no Python
+`pnpm desktop:build` creates a PyInstaller onefile executable. Linux/macOS add it
+to Tauri's `bundle.externalBin`. Windows uses `tauri.windows.conf.json` to enable
+the `embedded-sidecar` feature and embed it inside the desktop executable; no
+adjacent sidecar is needed. The Windows build script also exports a portable EXE
+and checksums, with `-PortableOnly` available to skip installer generation.
+Sidecar filenames include the Rust host target triple.
+Build separately on each target OS and architecture; there is no Python
 cross-compilation. For example, `pnpm sidecar:build --target
 x86_64-unknown-linux-gnu` can select the filename explicitly on a Linux x64 host.
 Use a sufficiently old Linux build environment for the required glibc baseline.
@@ -113,6 +117,14 @@ an IPC-only startup test does not verify that HTTPS works in a packaged runtime.
 Installers need no user-installed Python. Linux still needs the distribution's
 WebKitGTK runtime, and Windows needs WebView2 as managed by the Tauri installer.
 Signing, notarization, and automatic updates require release configuration.
+
+Embedded releases extract a SHA-256 verified backend to the user's cache under
+`gl.legendary.desktop/backend/<target>/<digest>/`. An OS file lock serializes
+extraction, and an atomic replacement repairs missing or corrupt files. Payload
+versions have separate directories, so updates do not overwrite a running older
+backend. The process protocol and Python multiprocessing paths are preserved.
+Embedded mode can also be enabled explicitly on Linux for validation; default
+Linux/macOS packaging continues using the bundled external sidecar.
 
 ## Runtime contract
 
@@ -160,7 +172,8 @@ Signing, notarization, and automatic updates require release configuration.
 ## Initial validation
 
 The implementation has 43 Python tests, 21 frontend tests, and 4 Rust
-transport tests. Python process tests can also run against the frozen executable
+transport tests, plus 6 extraction/process tests when `embedded-sidecar` is enabled.
+Python process tests can also run against the frozen executable
 by setting `LEGENDARY_TEST_BRIDGE` to its absolute path. They cover IPC framing,
 external CLI state changes, and an isolated native test process that continues
 after the bridge exits. Linux native compilation and desktop-to-sidecar startup
@@ -178,3 +191,17 @@ Import process tests cover complete files without chunk downloads, missing and
 corrupt files, cancellation, file changes during review, directory reassociation,
 old Epic manifests, platform selection, invalid paths, and exclusion of concurrent
 installations. These tests also run against the bundled Python executable.
+
+To test the embedded path, build the sidecar, then run:
+
+```sh
+cargo test --manifest-path desktop/src-tauri/Cargo.toml -p legendary-transport --features embedded-sidecar --locked
+cargo build --manifest-path desktop/src-tauri/Cargo.toml -p legendary-transport --example embedded-bridge --release --features embedded-sidecar --locked
+# Linux example; append .exe on Windows
+LEGENDARY_TEST_BRIDGE="$PWD/desktop/src-tauri/target/release/examples/embedded-bridge" python -m unittest discover -s tests -v
+```
+
+The headless harness embeds and extracts the real frozen service and forwards
+requests through the same Rust transport as the desktop application. CI runs
+this suite on Linux, Windows, and macOS; extraction tests cover cache reuse,
+corruption recovery, concurrent starts, and payload updates.

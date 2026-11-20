@@ -1,0 +1,8 @@
+{
+  "build": {
+    "features": ["embedded-sidecar"]
+  },
+  "bundle": {
+    "externalBin": []
+  }
+}

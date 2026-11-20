@@ -178,6 +178,7 @@ const messages: Record<string, string> = {
     "安装尚未完成或需要校验。请先续传安装，或通过 CLI 校验游戏文件。",
   METADATA_MISSING: "缺少游戏信息，请先刷新游戏库。",
   BACKEND_UNAVAILABLE: "游戏服务未能启动，请检查桌面安装或重新打开应用。",
+  BACKEND_CACHE_ERROR: "无法释放或校验内置游戏服务，请检查应用缓存目录的可用空间和访问权限。",
   BACKEND_EXITED: "游戏服务已断开，请重试以重新连接。",
   BACKEND_TIMEOUT: "请求超时，请检查网络并重试。",
   BACKEND_BUSY: "游戏服务正在处理其他请求，请稍后重试。",

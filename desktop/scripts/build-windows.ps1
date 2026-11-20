@@ -1,5 +1,6 @@
 param(
     [switch]$SkipDependencies,
+    [switch]$PortableOnly,
     [switch]$Help
 )
 
@@ -8,12 +9,14 @@ Set-StrictMode -Version Latest
 
 if ($Help) {
     Write-Output @'
-Usage: powershell -File desktop/scripts/build-windows.ps1 [-SkipDependencies]
+Usage: powershell -File desktop/scripts/build-windows.ps1 [-SkipDependencies] [-PortableOnly]
 
 Run on Windows with the MSVC Rust toolchain and Visual Studio C++ build tools.
 Requires Node.js 22+, pnpm 10, and WebView2 (see desktop/BUILDING.md).
 By default, prepares uv 0.11+ and installs locked dependencies into .venv and desktop/node_modules.
 -SkipDependencies reuses installed dependencies and LEGENDARY_DESKTOP_PYTHON if set.
+-PortableOnly builds just the single-file portable EXE, skipping NSIS and MSI.
+All Windows release builds embed the Python service into the desktop EXE.
 '@
     return
 }
@@ -32,6 +35,7 @@ function Invoke-BuildCommand {
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $previousPython = $env:LEGENDARY_DESKTOP_PYTHON
+$previousTargetDirectory = $env:CARGO_TARGET_DIR
 Push-Location $projectRoot
 try {
     foreach ($tool in @('node', 'pnpm', 'cargo', 'rustc')) {
@@ -71,11 +75,41 @@ try {
     Invoke-BuildCommand $python @('desktop/scripts/check-build-env.py', $target)
     $env:LEGENDARY_DESKTOP_PYTHON = $python
     Set-Location (Join-Path $projectRoot 'desktop')
+    $targetDirectory = if ($env:CARGO_TARGET_DIR) {
+        $requestedTargetDirectory = $env:CARGO_TARGET_DIR
+        if (-not [IO.Path]::IsPathRooted($requestedTargetDirectory)) {
+            $requestedTargetDirectory = Join-Path (Join-Path $projectRoot 'desktop/src-tauri') $requestedTargetDirectory
+        }
+        [IO.Path]::GetFullPath($requestedTargetDirectory)
+    } else {
+        Join-Path $projectRoot 'desktop/src-tauri/target'
+    }
+    $env:CARGO_TARGET_DIR = $targetDirectory
     Invoke-BuildCommand 'pnpm' @('sidecar:build', '--target', $target)
-    Invoke-BuildCommand 'pnpm' @('tauri', 'build', '--ci', '--target', $target, '--bundles', 'nsis,msi', '--', '--locked')
-    $targetDirectory = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $projectRoot 'desktop/src-tauri/target' }
-    Write-Output "`nBuild complete ($target). Bundles: $targetDirectory/$target/release/bundle/"
+    $buildArguments = @('tauri', 'build', '--ci', '--target', $target, '--features', 'embedded-sidecar')
+    if ($PortableOnly) {
+        $buildArguments += '--no-bundle'
+    } else {
+        $buildArguments += @('--bundles', 'nsis,msi')
+    }
+    $buildArguments += @('--', '--locked')
+    Invoke-BuildCommand 'pnpm' $buildArguments
+    $releaseDirectory = Join-Path $targetDirectory "$target/release"
+    $portableDirectory = Join-Path $releaseDirectory 'portable'
+    New-Item -ItemType Directory -Path $portableDirectory -Force | Out-Null
+    $version = (Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version
+    $architecture = ($target -split '-')[0]
+    $portableName = "Legendary_${version}_${architecture}_portable.exe"
+    $portablePath = Join-Path $portableDirectory $portableName
+    Copy-Item -LiteralPath (Join-Path $releaseDirectory 'legendary-desktop.exe') -Destination $portablePath -Force
+    $checksum = (Get-FileHash -LiteralPath $portablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath (Join-Path $portableDirectory 'SHA256SUMS') -Encoding Ascii -Value "$checksum  $portableName"
+    Write-Output "`nSingle-file portable application: $portablePath"
+    if (-not $PortableOnly) {
+        Write-Output "Installers: $releaseDirectory/bundle/"
+    }
 } finally {
     $env:LEGENDARY_DESKTOP_PYTHON = $previousPython
+    $env:CARGO_TARGET_DIR = $previousTargetDirectory
     Pop-Location
 }

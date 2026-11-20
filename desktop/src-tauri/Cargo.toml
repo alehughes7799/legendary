@@ -6,6 +6,9 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 rust-version = "1.77.2"
 
+[features]
+embedded-sidecar = ["legendary-transport/embedded-sidecar"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

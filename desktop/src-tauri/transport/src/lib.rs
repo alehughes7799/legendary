@@ -12,6 +12,9 @@ use std::{
 };
 use tokio::sync::{oneshot, OnceCell};
 
+#[cfg(feature = "embedded-sidecar")]
+mod embedded;
+
 const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 type Reply = Result<Value, BackendError>;
 
@@ -261,6 +264,22 @@ fn sidecar_command() -> Result<Command, BackendError> {
         command.current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."));
         return Ok(command);
     }
+    #[cfg(feature = "embedded-sidecar")]
+    {
+        let path = embedded::executable().map_err(|_| {
+            BackendError::new(
+                "BACKEND_CACHE_ERROR",
+                "Could not prepare the bundled game service in the application cache.",
+            )
+        })?;
+        Ok(Command::new(path))
+    }
+    #[cfg(not(feature = "embedded-sidecar"))]
+    external_sidecar_command()
+}
+
+#[cfg(not(feature = "embedded-sidecar"))]
+fn external_sidecar_command() -> Result<Command, BackendError> {
     let executable = std::env::current_exe().map_err(|_| {
         BackendError::new(
             "BACKEND_UNAVAILABLE",

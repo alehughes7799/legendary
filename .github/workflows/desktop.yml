@@ -49,8 +49,21 @@ jobs:
           export LEGENDARY_TEST_PYTHON="$(python -c 'import sys; print(sys.executable)')"
           cargo test --manifest-path desktop/src-tauri/Cargo.toml -p legendary-transport --locked
       - name: Build desktop application
+        if: runner.os != 'Windows'
         working-directory: desktop
         run: pnpm desktop:build
+      - name: Build Windows installers and single-file EXE
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\desktop\scripts\build-windows.ps1 -SkipDependencies
+      - name: Test embedded service extraction and IPC
+        shell: bash
+        run: |
+          export LEGENDARY_TEST_PYTHON="$(python -c 'import sys; print(sys.executable)')"
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml -p legendary-transport --features embedded-sidecar --locked
+          cargo build --manifest-path desktop/src-tauri/Cargo.toml -p legendary-transport --example embedded-bridge --release --features embedded-sidecar --locked
+          export LEGENDARY_TEST_BRIDGE="$(uv run python -c 'import os,pathlib; print(pathlib.Path("desktop/src-tauri/target/release/examples/embedded-bridge" + (".exe" if os.name == "nt" else "")).resolve())')"
+          uv run python -m unittest discover -s tests -v
       - name: Test the bundled Python service
         shell: bash
         run: |
@@ -59,4 +72,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: legendary-desktop-${{ runner.os }}-${{ runner.arch }}
-          path: desktop/src-tauri/target/release/bundle/
+          path: |
+            desktop/src-tauri/target/release/bundle/
+            desktop/src-tauri/target/*/release/bundle/
+            desktop/src-tauri/target/*/release/portable/
