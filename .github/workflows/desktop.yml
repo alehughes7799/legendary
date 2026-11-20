@@ -1,0 +1,62 @@
+name: Desktop
+
+on:
+  push:
+    paths: ['desktop/**', 'legendary/**', 'tests/**', 'pyproject.toml', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', 'legendary/**', 'tests/**', 'pyproject.toml', '.github/workflows/desktop.yml']
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Python dependencies and tests
+        run: |
+          uv sync --extra pyinstaller_build
+          uv run python -m unittest discover -s tests -v
+          uv run ruff check legendary desktop/sidecar_entry.py desktop/pyinstaller-hooks tests
+      - name: Frontend dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+      - name: Frontend tests
+        working-directory: desktop
+        run: pnpm test
+      - name: Transport tests
+        shell: bash
+        run: |
+          export LEGENDARY_TEST_PYTHON="$(python -c 'import sys; print(sys.executable)')"
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml -p legendary-transport --locked
+      - name: Build desktop application
+        working-directory: desktop
+        run: pnpm desktop:build
+      - name: Test the bundled Python service
+        shell: bash
+        run: |
+          export LEGENDARY_TEST_BRIDGE="$(uv run python -c 'import os,pathlib; print(pathlib.Path("desktop/.sidecar-build/dist/legendary-sidecar" + (".exe" if os.name == "nt" else "")).resolve())')"
+          uv run python -m unittest discover -s tests -v
+      - uses: actions/upload-artifact@v7
+        with:
+          name: legendary-desktop-${{ runner.os }}-${{ runner.arch }}
+          path: desktop/src-tauri/target/release/bundle/

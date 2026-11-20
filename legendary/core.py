@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from hashlib import sha1
 from locale import getdefaultlocale
 from multiprocessing import Queue
+from pathlib import Path
 from platform import system
 from sys import platform as sys_platform
 from urllib.parse import parse_qsl, urlencode, urlparse
@@ -154,15 +155,18 @@ class LegendaryCore:
         self.log.error(f'Getting exchange code failed: {r.json()}')
         return ''
 
-    def auth_code(self, code) -> bool:
+    def auth_code(self, code, *, raise_errors=False) -> bool:
         """
         Handles authentication via authorization code (either retrieved manually or automatically)
+        Set raise_errors to preserve failure details for non-CLI callers.
         """
         try:
             with self.lgd.userdata_lock as lock:
                 lock.data = self.egs.start_session(authorization_code=code)
             return True
         except Exception as e:
+            if raise_errors:
+                raise
             self.log.error(f'Logging in failed with {e!r}, please try again.')
             return False
 
@@ -1887,29 +1891,43 @@ class LegendaryCore:
         igame.prereq_info['installed'] = True
         self.lgd.set_installed_game(app_name, igame)
 
-    def import_game(self, game: Game, app_path: str, egl_guid='', platform='Windows') -> (Manifest, InstalledGame):
+    def import_game(self, game: Game, app_path: str, egl_guid='', platform='Windows',
+                    manifest_data=None) -> (Manifest, InstalledGame):
         needs_verify = True
-        manifest_data = None
 
         # check if the game is from an EGL installation, load manifest if possible
-        if not game.is_dlc and os.path.exists(os.path.join(app_path, '.egstore')):
+        if (manifest_data is None and not game.is_dlc and platform == 'Windows'
+                and os.path.isdir(os.path.join(app_path, '.egstore'))):
+            root = Path(app_path).resolve()
+            store = root / '.egstore'
+
+            def local_file(name):
+                path = store / name
+                if not path.resolve().is_relative_to(root) or Path(name).name != name:
+                    raise ValueError('Invalid EGL metadata path')
+                return path
+
             mf = None
             if not egl_guid:
-                for f in os.listdir(os.path.join(app_path, '.egstore')):
+                for f in sorted(os.listdir(store)):
                     if not f.endswith('.mancpn'):
                         continue
 
                     self.log.debug(f'Checking mancpn file "{f}"...')
-                    mancpn = json.load(open(os.path.join(app_path, '.egstore', f), 'rb'))
-                    if mancpn['AppName'] == game.app_name:
+                    try:
+                        with local_file(f).open('rb') as stream:
+                            mancpn = json.load(stream)
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if isinstance(mancpn, dict) and mancpn.get('AppName') == game.app_name:
                         self.log.info('Found EGL install metadata, verifying...')
-                        mf = f.replace('.mancpn', '.manifest')
+                        mf = f[:-7] + '.manifest'
                         break
             else:
                 mf = f'{egl_guid}.manifest'
 
-            if mf and os.path.exists(os.path.join(app_path, '.egstore', mf)):
-                manifest_data = open(os.path.join(app_path, '.egstore', mf), 'rb').read()
+            if mf and local_file(mf).is_file():
+                manifest_data = local_file(mf).read_bytes()
             else:
                 self.log.warning('.egstore folder exists but manifest file is missing, continuing as regular import...')
 
@@ -1926,7 +1944,7 @@ class LegendaryCore:
         manifest_secrets = dict()
         if not manifest_data:
             self.log.info(f'Downloading latest manifest for "{game.app_name}"')
-            manifest_data, base_urls, _, manifest_secrets = self.get_cdn_manifest(game)
+            manifest_data, base_urls, _, manifest_secrets = self.get_cdn_manifest(game, platform=platform)
             if not game.base_urls:
                 game.base_urls = base_urls
                 self.lgd.set_game_meta(game.app_name, game)
@@ -1937,6 +1955,8 @@ class LegendaryCore:
         # parse and save manifest to disk for verification step of import
         new_manifest = self.load_manifest(manifest_data)
         new_manifest.decrypt(manifest_secrets)
+        if new_manifest.meta.app_name != game.app_name:
+            raise ValueError('The import manifest belongs to another game')
         self.lgd.save_manifest(game.app_name, new_manifest,
                                version=new_manifest.meta.build_version, platform=platform)
         install_size = sum(fm.file_size for fm in new_manifest.file_manifest_list.elements)

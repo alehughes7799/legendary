@@ -40,6 +40,7 @@ from legendary.lfs.wine_helpers import (
 )
 from legendary.models.exceptions import InvalidCredentialsError
 from legendary.models.game import Game, SaveGameStatus, VerifyResult
+from legendary.services.launch import build_launch, start_game
 from legendary.utils.cli import (
     get_boolean_choice,
     get_int_choice,
@@ -687,33 +688,11 @@ class LegendaryCLI:
         if args.json:
             return self._print_json(vars(params), args.pretty_json)
 
-        # Copying existing env vars is required on Windows, probably a good idea on Linux
-        full_env = os.environ.copy()
-        full_env.update(params.environment)
-
-        full_params = list()
-        full_params.extend(params.launch_command)
-        if 'LEGENDARY_WRAPPER_EXE' in full_env:
-            full_params.append(full_env['LEGENDARY_WRAPPER_EXE'].strip())
-        full_params.append(os.path.join(params.game_directory, params.game_executable))
-        full_params.extend(params.game_parameters)
-        full_params.extend(params.user_parameters)
-        full_params.extend(params.egl_parameters)
-
-        if 'CX_BOTTLE' in full_env and any('SharedSupport/CrossOver' in p for p in params.launch_command):
-            # if using crossover, unset WINEPREFIX
-            full_env.pop('WINEPREFIX', None)
-            # check that bottle is valid, show error otherwise
-            bottle_name = full_env["CX_BOTTLE"].strip()
-            if not mac_is_valid_bottle(bottle_name):
-                if bottle_name == 'Legendary':
-                    logger.error('Attempted to use default CrossOver bottle ("Legendary"), but it does not exist, '
-                                 'see https://legendary.gl/crossover-setup for setup instructions.')
-                else:
-                    logger.error(f'Specified CrossOver bottle {bottle_name} does not exist, cannot launch.')
-                exit(1)
-            else:
-                logger.info(f'Using CrossOver Bottle "{bottle_name}"')
+        try:
+            full_params, full_env = build_launch(params)
+        except ValueError as e:
+            logger.error(str(e))
+            exit(1)
 
         if args.dry_run:
             logger.info(f'Not Launching {app_name} (dry run)')
@@ -726,22 +705,12 @@ class LegendaryCLI:
                     f'{k}={v}' for k, v in params.environment.items())))
         else:
             logger.info(f'Launching {app_name}...')
-            if params.pre_launch_command:
-                try:
-                    logger.debug(f'Running pre-launch command: {params.pre_launch_command}')
-                    p = subprocess.Popen(shlex.split(params.pre_launch_command), env=full_env)
-                    if params.pre_launch_wait:
-                        logger.debug('Waiting for pre-launch command to finish...')
-                        p.wait()
-                except Exception as e:
-                    logger.warning(f'Pre-launch command failed: {e!r}')
-
             logger.debug(f'Launch parameters: {shlex.join(full_params)}')
             logger.debug(f'Working directory: {params.working_directory}')
             if params.environment:
                 logger.debug('Environment overrides: {}'.format(', '.join(
                     f'{k}={v}' for k, v in params.environment.items())))
-            subprocess.Popen(full_params, cwd=params.working_directory, env=full_env, shell=os.name == 'nt')
+            start_game(params)
 
     def _launch_third_party(self, args):
         game = self.core.get_game(app_name=args.app_name)
@@ -1085,6 +1054,8 @@ class LegendaryCLI:
 
             dlm.start()
             dlm.join()
+            if dlm.exitcode != 0:
+                raise RuntimeError(f'Download manager exited with status {dlm.exitcode}')
         except Exception as e:
             end_t = time.time()
             logger.info(f'Installation failed after {end_t - start_t:.02f} seconds.')

@@ -135,3 +135,9 @@ dmypy.json
 testing/
 stuff/
 dist_pyinstaller/
+
+# Desktop build outputs
+desktop/node_modules/
+desktop/.sidecar-build/
+desktop/src-tauri/binaries/legendary-sidecar-*
+desktop/src-tauri/gen/

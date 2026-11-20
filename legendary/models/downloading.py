@@ -117,6 +117,9 @@ class UIUpdate:
     read_speed: float
     memory_usage: float
     current_filename: Optional[str] = None
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
+    eta_seconds: Optional[float] = None
 
 
 @dataclass

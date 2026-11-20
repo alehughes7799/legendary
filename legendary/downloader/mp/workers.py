@@ -2,6 +2,7 @@
 import logging
 import os
 import time
+from hashlib import sha1
 from logging.handlers import QueueHandler
 from multiprocessing import Process
 from multiprocessing.shared_memory import SharedMemory
@@ -97,6 +98,8 @@ class DLWorker(Process):
                         logger.info(f'Sleeping {sleep_time} seconds before retrying.')
                         time.sleep(sleep_time)
 
+                    tries += 1
+
                     # print('Downloading', job.url)
                     logger.debug(f'Downloading {job.url}')
 
@@ -120,6 +123,7 @@ class DLWorker(Process):
                 logger.error(f'Job for {job.chunk_guid} failed with: {e!r}, fetching next one...')
                 # add failed job to result queue to be requeued
                 self.o_q.put(DownloaderTaskResult(success=False, **job.__dict__))
+                continue
             except KeyboardInterrupt:
                 logger.warning('Immediate exit requested, quitting...')
                 break
@@ -134,7 +138,9 @@ class DLWorker(Process):
                 data = chunk.data
                 size = len(data)
                 if size > job.shm.size:
-                    logger.fatal('Downloaded chunk is longer than SharedMemorySegment!')
+                    raise ValueError('Downloaded chunk is longer than SharedMemorySegment!')
+                if chunk.hash_type & 0x2 and sha1(data).digest() != chunk.sha_hash:
+                    raise ValueError('Downloaded chunk hash does not match!')
 
                 self.shm.buf[job.shm.offset:job.shm.offset + size] = data
                 del chunk
@@ -204,7 +210,7 @@ class FileWorker(Process):
                 full_path = os.path.join(file_dir, filename)
 
                 if j.flags & TaskFlags.CREATE_EMPTY_FILE:  # just create an empty file
-                    open(full_path, 'a').close()
+                    open(full_path, 'wb').close()
                     self.o_q.put(WriterTaskResult(success=True, **j.__dict__))
                     continue
                 if j.flags & TaskFlags.CREATE_SYMLINK:
@@ -280,9 +286,13 @@ class FileWorker(Process):
 
                     try:
                         os.remove(full_path)
+                    except FileNotFoundError:
+                        pass
                     except OSError as e:
                         if not j.flags & TaskFlags.SILENT:
                             logger.error(f'Removing file failed: {e!r}')
+                            self.o_q.put(WriterTaskResult(success=False, **j.__dict__))
+                            continue
 
                     self.o_q.put(WriterTaskResult(success=True, **j.__dict__))
                     continue
@@ -298,6 +308,8 @@ class FileWorker(Process):
                     except OSError as e:
                         if not j.flags & TaskFlags.SILENT:
                             logger.error(f'chmod\'ing file failed: {e!r}')
+                            self.o_q.put(WriterTaskResult(success=False, **j.__dict__))
+                            continue
 
                     self.o_q.put(WriterTaskResult(success=True, **j.__dict__))
                     continue

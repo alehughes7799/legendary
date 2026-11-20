@@ -5,12 +5,12 @@ import logging
 import os
 import time
 from collections import Counter, defaultdict, deque
+from contextlib import suppress
 from logging.handlers import QueueHandler
-from multiprocessing import Process, cpu_count
+from multiprocessing import Event, Process, cpu_count
 from multiprocessing import Queue as MPQueue
 from multiprocessing.shared_memory import SharedMemory
 from queue import Empty
-from sys import exit
 from threading import Condition, Thread
 
 from legendary.downloader.mp.workers import DLWorker, FileWorker
@@ -71,10 +71,14 @@ class DLManager(Process):
 
         # Resume file stuff
         self.resume_file = resume_file
+        self.keep_resume_file = False
         self.hash_map = dict()
 
         # cross-thread runtime information
         self.running = True
+        self.cancel_event = Event()
+        self.failure_reason = None
+        self.download_failures = Counter()
         self.active_tasks = 0
         self.children = []
         self.threads = []
@@ -89,6 +93,8 @@ class DLManager(Process):
         # chunks written since last report
         self.num_processed_since_last = 0
         self.num_tasks_processed_since_last = 0
+        self.tasks_completed = 0
+        self.chunks_completed = 0
 
     def run_analysis(self, manifest: Manifest, old_manifest: Manifest = None,
                      patch=True, resume=True, file_prefix_filter=None,
@@ -111,8 +117,8 @@ class DLManager(Process):
 
         analysis_res = AnalysisResult()
         analysis_res.install_size = sum(fm.file_size for fm in manifest.file_manifest_list.elements)
-        analysis_res.biggest_chunk = max(c.window_size for c in manifest.chunk_data_list.elements)
-        analysis_res.biggest_file_size = max(f.file_size for f in manifest.file_manifest_list.elements)
+        analysis_res.biggest_chunk = max((c.window_size for c in manifest.chunk_data_list.elements), default=1024 * 1024)
+        analysis_res.biggest_file_size = max((f.file_size for f in manifest.file_manifest_list.elements), default=0)
         is_1mib = analysis_res.biggest_chunk == 1024 * 1024
         self.log.debug(f'Biggest chunk size: {analysis_res.biggest_chunk} bytes (== 1 MiB? {is_1mib})')
 
@@ -450,7 +456,7 @@ class DLManager(Process):
 
     def download_job_manager(self, task_cond: Condition, shm_cond: Condition):
         while self.chunks_to_dl and self.running:
-            while self.active_tasks < self.max_workers * 2 and self.chunks_to_dl:
+            while self.running and self.active_tasks < self.max_workers * 2 and self.chunks_to_dl:
                 try:
                     sms = self.sms.popleft()
                     no_shm = False
@@ -489,7 +495,7 @@ class DLManager(Process):
     def dl_results_handler(self, task_cond: Condition):
         in_buffer = dict()
 
-        task = self.tasks.popleft()
+        task = self.tasks.popleft() if self.tasks else None
         current_file = ''
 
         while task and self.running:
@@ -509,7 +515,7 @@ class DLManager(Process):
                     break
                 continue
 
-            while (task.chunk_guid in in_buffer) or task.chunk_file:
+            while self.running and ((task.chunk_guid in in_buffer) or task.chunk_file):
                 res_shm = None
                 if not task.chunk_file:  # not re-using from an old file
                     res_shm = in_buffer[task.chunk_guid].shm
@@ -549,6 +555,11 @@ class DLManager(Process):
                         self.bytes_downloaded_since_last += res.size_downloaded
                         self.bytes_decompressed_since_last += res.size_decompressed
                     else:
+                        self.download_failures[res.chunk_guid] += 1
+                        if self.download_failures[res.chunk_guid] >= 3:
+                            self.failure_reason = 'Download retries exhausted.'
+                            self.running = False
+                            break
                         self.log.error(f'Download for {res.chunk_guid} failed, retrying...')
                         try:
                             # since the result is a subclass of the task we can simply resubmit the result object
@@ -575,6 +586,7 @@ class DLManager(Process):
                     break
 
                 self.num_tasks_processed_since_last += 1
+                self.tasks_completed += 1
 
                 if res.flags & TaskFlags.CLOSE_FILE and self.resume_file and res.success:
                     if res.filename.endswith('.tmp'):
@@ -586,8 +598,10 @@ class DLManager(Process):
                         rf.write(f'{file_hash}:{res.filename}\n')
 
                 if not res.success:
-                    # todo make this kill the installation process or at least skip the file and mark it as failed
                     self.log.fatal(f'Writing for {res.filename} failed!')
+                    self.failure_reason = 'Writing game files failed.'
+                    self.running = False
+                    break
                 if res.flags & TaskFlags.RELEASE_MEMORY:
                     self.sms.appendleft(res.shared_memory)
                     with shm_cond:
@@ -599,60 +613,64 @@ class DLManager(Process):
                     if not res.shared_memory:
                         self.bytes_read_since_last += res.size
                     self.num_processed_since_last += 1
+                    self.chunks_completed += 1
 
             except Empty:
                 continue
             except Exception as e:
                 self.log.warning(f'Exception when trying to read writer result queue: {e!r}')
+                self.failure_reason = 'Processing a file result failed.'
+                self.running = False
         self.log.debug('Writer result handler quitting...')
 
     def run(self):
-        if not self.analysis:
-            raise ValueError('Did not run analysis before trying to run download!')
-
-        # Subprocess will use its own root logger that logs to a Queue instead
+        completed = False
         _root = logging.getLogger()
         _root.setLevel(logging.DEBUG if self.proc_debug else logging.INFO)
         if self.logging_queue:
-            _root.handlers = []
-            _root.addHandler(QueueHandler(self.logging_queue))
-
+            _root.handlers = [QueueHandler(self.logging_queue)]
         self.log = logging.getLogger('DLManager')
-        self.log.info(f'Download Manager running with process-id: {os.getpid()}')
-
         try:
+            if not self.analysis:
+                raise ValueError('Run analysis before starting the download.')
             self.run_real()
+            completed = self.running and not self.cancel_event.is_set() and not self.failure_reason
         except KeyboardInterrupt:
-            self.log.warning('Immediate exit requested!')
+            self.cancel_event.set()
+        except Exception as exc:
+            self.log.error('Download manager failed (%s).', type(exc).__name__)
+            self.failure_reason = 'Download manager failed.'
+        finally:
             self.running = False
-
-            # send conditions to unlock threads if they aren't already
             for cond in self.conditions:
                 with cond:
-                    cond.notify()
-
-            # make sure threads are dead.
-            for t in self.threads:
-                t.join(timeout=5.0)
-                if t.is_alive():
-                    self.log.warning(f'Thread did not terminate! {repr(t)}')
-
-            # forcibly kill DL workers that are not actually dead yet
+                    cond.notify_all()
             for child in self.children:
-                child.join(timeout=5.0)
-                if child.exitcode is None:
+                if child.is_alive():
                     child.terminate()
-
-            # clean up all the queues, otherwise this process won't terminate properly
-            for name, q in zip(('Download jobs', 'Writer jobs', 'Download results', 'Writer results'),
-                               (self.dl_worker_queue, self.writer_queue, self.dl_result_q, self.writer_result_q)):
-                self.log.debug(f'Cleaning up queue "{name}"')
-                try:
-                    while True:
-                        _ = q.get_nowait()
-                except Empty:
-                    q.close()
-                    q.join_thread()
+            for child in self.children:
+                if child.pid is None:
+                    child.shm.close()
+                    continue
+                child.join(timeout=3)
+                if child.is_alive():
+                    child.kill()
+                    child.join(timeout=3)
+                child.shm.close()
+            for thread in self.threads:
+                thread.join(timeout=3)
+            for queue in (self.dl_worker_queue, self.writer_queue, self.dl_result_q, self.writer_result_q):
+                if queue is not None:
+                    queue.cancel_join_thread()
+                    queue.close()
+            if self.shared_memory:
+                self.shared_memory.close()
+                self.shared_memory.unlink()
+                self.shared_memory = None
+            if completed and self.resume_file and not self.keep_resume_file:
+                with suppress(FileNotFoundError):
+                    os.remove(self.resume_file)
+        raise SystemExit(0 if completed else 2 if self.cancel_event.is_set() else 1)
 
     def run_real(self):
         self.shared_memory = SharedMemory(create=True, size=self.max_shared_memory)
@@ -721,15 +739,19 @@ class DLManager(Process):
 
         last_update = time.time()
 
-        while processed_tasks < num_tasks:
+        while processed_tasks < num_tasks and self.running and not self.cancel_event.is_set():
+            if any(child.exitcode is not None for child in self.children):
+                self.failure_reason = 'A download worker exited unexpectedly.'
+                self.running = False
+                break
             delta = time.time() - last_update
             if not delta:
                 time.sleep(self.update_interval)
                 continue
 
             # update all the things
-            processed_chunks += self.num_processed_since_last
-            processed_tasks += self.num_tasks_processed_since_last
+            processed_chunks = self.chunks_completed
+            processed_tasks = self.tasks_completed
 
             total_dl += self.bytes_downloaded_since_last
             total_write += self.bytes_written_since_last
@@ -746,7 +768,7 @@ class DLManager(Process):
             self.bytes_decompressed_since_last = self.num_tasks_processed_since_last = 0
             last_update = time.time()
 
-            perc = (processed_chunks / num_chunk_tasks) * 100
+            perc = min(100.0, processed_tasks / max(1, num_tasks) * 100)
             runtime = time.time() - s_time
             total_avail = len(self.sms)
             total_used = (num_shared_memory_segments - total_avail) * (self.analysis.biggest_chunk / 1024 / 1024)
@@ -778,13 +800,18 @@ class DLManager(Process):
             if self.status_queue:
                 try:
                     self.status_queue.put(UIUpdate(
-                        progress=perc, download_speed=dl_unc_speed, write_speed=w_speed, read_speed=r_speed,
-                        memory_usage=total_used * 1024 * 1024
+                        progress=perc, download_speed=dl_speed, write_speed=w_speed, read_speed=r_speed,
+                        memory_usage=total_used * 1024 * 1024, downloaded_bytes=total_dl,
+                        total_bytes=self.analysis.dl_size,
+                        eta_seconds=(num_chunk_tasks - processed_chunks) * (time.time() - s_time) / processed_chunks if processed_chunks else None
                     ), timeout=1.0)
                 except Exception as e:
                     self.log.warning(f'Failed to send status update to queue: {e!r}')
 
             time.sleep(self.update_interval)
+
+        if not self.running or self.cancel_event.is_set():
+            return
 
         for _ in range(self.max_workers):
             self.dl_worker_queue.put_nowait(TerminateWorkerTask())
@@ -797,29 +824,7 @@ class DLManager(Process):
             self.log.warning('Terminating writer process, no exit code!')
             writer_p.terminate()
 
-        # forcibly kill DL workers that are not actually dead yet
-        for child in self.children:
-            if child.exitcode is None:
-                child.terminate()
-
-        # make sure all the threads are dead.
-        for t in self.threads:
-            t.join(timeout=5.0)
-            if t.is_alive():
-                self.log.warning(f'Thread did not terminate! {repr(t)}')
-
-        # clean up resume file
-        if self.resume_file:
-            try:
-                os.remove(self.resume_file)
-            except OSError as e:
-                self.log.warning(f'Failed to remove resume file: {e!r}')
-
-        # close up shared memory
-        self.shared_memory.close()
-        self.shared_memory.unlink()
-        self.shared_memory = None
-
-        self.log.info('All done! Download manager quitting...')
-        # finally, exit the process.
-        exit(0)
+        if writer_p.exitcode != 0:
+            self.failure_reason = 'File writer did not finish successfully.'
+            self.running = False
+        self.log.info('Download manager finished.')

@@ -14,8 +14,13 @@ If you run into any issues [ask for help on our Discord](https://legendary.gl/di
 Finally, if you wish to support the project, please consider [buying me a coffee on Ko-Fi](https://ko-fi.com/derrod).
 Alternatively, if you've been considering picking up a copy of CrossOver you can use my [affiliate link](https://www.codeweavers.com/?ad=892) and discount code `LEGENDARY15` in their store.
 
-**Note:** Legendary is currently a CLI (command-line interface) application without a graphical user interface,
-it has to be run from a terminal (e.g. PowerShell)
+**Note:** The default Legendary package is a CLI (command-line interface)
+application, run from a terminal (e.g. PowerShell).
+
+A Tauri desktop preview is being developed in [`desktop/`](desktop/README.md).
+It supports login, browsing the library, installing/updating base games with
+progress and resumable downloads, importing verified existing games, and launching
+installed games. See the desktop guide for development and build instructions.
 
 **Features:**
  - Authenticating with Epic's service

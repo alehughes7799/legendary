@@ -5,6 +5,7 @@ import os
 from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from time import time
 
 from filelock import FileLock
@@ -361,8 +362,18 @@ class LGDLFS:
         else:
             self._installed[app_name] = install_info.__dict__
 
-        json.dump(self._installed, open(os.path.join(self.path, 'installed.json'), 'w'),
-                  indent=2, sort_keys=True)
+        target = Path(self.path, 'installed.json')
+        temporary = None
+        try:
+            with NamedTemporaryFile(mode='w', encoding='utf-8', dir=self.path, delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(self._installed, stream, indent=2, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(target)
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
 
     def remove_installed_game(self, app_name):
         if self._installed is None:
