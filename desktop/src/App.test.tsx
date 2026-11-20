@@ -211,10 +211,18 @@ async function openInstall(importing = false) {
   });
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Remote Game" }));
-  fireEvent.click(screen.getByRole("button", { name: importing ? "导入已有游戏" : "安装游戏" }));
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: importing ? "导入已有游戏" : "安装游戏",
+    }),
+  );
   await waitFor(() =>
     expect(
-      (screen.getByLabelText(importing ? "已有游戏目录" : "游戏安装目录") as HTMLInputElement).disabled,
+      (
+        screen.getByLabelText(
+          importing ? "已有游戏目录" : "游戏安装目录",
+        ) as HTMLInputElement
+      ).disabled,
     ).toBe(false),
   );
 }
@@ -228,7 +236,13 @@ const importTask: InstallTask = {
     downloadSize: 0,
     requiredSpace: 0,
     freeSpace: null,
-    importSummary: { totalFiles: 3, matchedFiles: 3, missingFiles: 0, changedFiles: 0, problemFiles: [] },
+    importSummary: {
+      totalFiles: 3,
+      matchedFiles: 3,
+      missingFiles: 0,
+      changedFiles: 0,
+      problemFiles: [],
+    },
   },
 };
 
@@ -245,12 +259,22 @@ describe("import existing games", () => {
       return { task: done };
     });
     await openInstall(true);
-    expect((screen.getByLabelText("已有游戏目录") as HTMLInputElement).value).toBe("");
+    expect(
+      (screen.getByLabelText("已有游戏目录") as HTMLInputElement).value,
+    ).toBe("");
     fireEvent.click(screen.getByRole("button", { name: "选择目录" }));
-    await waitFor(() => expect((screen.getByLabelText("已有游戏目录") as HTMLInputElement).value).toBe("/games/remote"));
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("已有游戏目录") as HTMLInputElement).value,
+      ).toBe("/games/remote"),
+    );
     fireEvent.click(screen.getByRole("button", { name: "检查已有文件" }));
     await screen.findByRole("heading", { name: "确认导入 Remote Game" });
-    expect(api.prepareImport).toHaveBeenCalledWith("remote-game", "Windows", "/games/remote");
+    expect(api.prepareImport).toHaveBeenCalledWith(
+      "remote-game",
+      "Windows",
+      "/games/remote",
+    );
     expect(api.prepareInstall).not.toHaveBeenCalled();
     expect(api.startInstall).not.toHaveBeenCalled();
     expect(screen.getByText("3 / 3 个文件")).toBeTruthy();
@@ -262,17 +286,32 @@ describe("import existing games", () => {
   it("blocks incomplete games and allows cancelling the import plan", async () => {
     const blocked = {
       ...importTask,
-      plan: { ...importTask.plan!, failures: ["文件不完整"], importSummary: {
-        totalFiles: 3, matchedFiles: 1, missingFiles: 1, changedFiles: 1, problemFiles: ["game.exe"],
-      } },
+      plan: {
+        ...importTask.plan!,
+        failures: ["文件不完整"],
+        importSummary: {
+          totalFiles: 3,
+          matchedFiles: 1,
+          missingFiles: 1,
+          changedFiles: 1,
+          problemFiles: ["game.exe"],
+        },
+      },
     };
     vi.mocked(api.prepareImport).mockResolvedValue({ task: blocked });
-    vi.mocked(api.cancelInstall).mockResolvedValue({ task: { ...blocked, state: "cancelled" } });
+    vi.mocked(api.cancelInstall).mockResolvedValue({
+      task: { ...blocked, state: "cancelled" },
+    });
     await openInstall(true);
-    fireEvent.change(screen.getByLabelText("已有游戏目录"), { target: { value: "/games/remote" } });
+    fireEvent.change(screen.getByLabelText("已有游戏目录"), {
+      target: { value: "/games/remote" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "检查已有文件" }));
     await screen.findByText("文件不完整");
-    expect((screen.getByRole("button", { name: "确认导入" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "确认导入" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
     expect(screen.getByText("game.exe")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "取消此计划" }));
     await screen.findByText("导入已取消，原有游戏文件与安装记录已保留。");
@@ -280,18 +319,145 @@ describe("import existing games", () => {
   });
 
   it("allows choosing another directory for a recorded installation", async () => {
-    vi.mocked(api.status).mockResolvedValue({ hasCredentials: true, displayName: "Player", defaultPlatform: "Windows" });
-    vi.mocked(api.installOptions).mockResolvedValue({ installPath: game.installPath, updating: true, platform: "Windows" });
+    vi.mocked(api.status).mockResolvedValue({
+      hasCredentials: true,
+      displayName: "Player",
+      defaultPlatform: "Windows",
+    });
+    vi.mocked(api.installOptions).mockResolvedValue({
+      installPath: game.installPath,
+      updating: true,
+      platform: "Windows",
+    });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: game.title }));
     fireEvent.click(screen.getByRole("button", { name: "重新关联目录" }));
-    await waitFor(() => expect((screen.getByLabelText("已有游戏目录") as HTMLInputElement).value).toBe(game.installPath));
-    expect((screen.getByLabelText("已有游戏目录") as HTMLInputElement).disabled).toBe(false);
-    expect((screen.getByRole("button", { name: "选择目录" }) as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("已有游戏目录") as HTMLInputElement).value,
+      ).toBe(game.installPath),
+    );
+    expect(
+      (screen.getByLabelText("已有游戏目录") as HTMLInputElement).disabled,
+    ).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "选择目录" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
   });
 });
 
 describe("desktop installation", () => {
+  it("opens a dedicated downloads page with a library entry when there are no tasks", async () => {
+    render(<App />);
+    await screen.findByRole("button", { name: game.title });
+    expect(screen.queryByText("暂无下载任务")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "下载管理" }));
+    expect(
+      screen.getByRole("heading", { name: "下载管理", level: 1 }),
+    ).toBeTruthy();
+    expect(screen.getByText("暂无下载任务")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "搜索游戏" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "前往游戏库" }));
+    expect(
+      screen.getByRole("heading", { name: "游戏库", level: 1 }),
+    ).toBeTruthy();
+  });
+
+  it("keeps installation settings on the downloads page when browsing the library", async () => {
+    await openInstall();
+    expect(
+      screen.getByRole("heading", { name: "下载管理", level: 1 }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.change(screen.getByLabelText("游戏安装目录"), {
+      target: { value: "/games/custom" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "返回游戏库" }));
+    expect(screen.queryByLabelText("游戏安装目录")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "下载管理" }));
+    expect(
+      (screen.getByLabelText("游戏安装目录") as HTMLInputElement).value,
+    ).toBe("/games/custom");
+    expect(api.installOptions).toHaveBeenCalledTimes(1);
+    expect(api.prepareInstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps downloading while browsing and shows the updated progress when returning", async () => {
+    vi.mocked(api.prepareInstall).mockImplementation(async () => {
+      vi.mocked(api.installStatus).mockResolvedValue({ task: installTask });
+      return { task: installTask };
+    });
+    vi.mocked(api.startInstall).mockResolvedValue({
+      task: { ...installTask, state: "downloading" },
+    });
+    vi.mocked(api.cancelInstall).mockResolvedValue({
+      task: { ...installTask, state: "cancelled" },
+    });
+    await openInstall();
+    fireEvent.click(screen.getByRole("button", { name: "检查安装" }));
+    await screen.findByRole("heading", { name: "确认安装 Remote Game" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "返回游戏库" }));
+    expect(screen.queryByRole("button", { name: "确认并开始安装" })).toBeNull();
+    expect(api.startInstall).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /下载管理/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并开始安装" }));
+    await screen.findByText("正在下载");
+    fireEvent.click(screen.getByRole("button", { name: "返回游戏库" }));
+    expect(screen.queryByRole("region", { name: "安装任务" })).toBeNull();
+    expect(screen.getByLabelText("1 个进行中的任务")).toBeTruthy();
+    const pollCount = vi.mocked(api.installStatus).mock.calls.length;
+    vi.mocked(api.installStatus).mockResolvedValue({
+      task: {
+        ...installTask,
+        state: "downloading",
+        progress: 50,
+        downloadSpeed: 1024,
+        downloadedBytes: 512 * 1024,
+      },
+    });
+    await waitFor(
+      () => expect(api.installStatus).toHaveBeenCalledTimes(pollCount + 1),
+      { timeout: 2500 },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /下载管理/ }));
+    expect(
+      (
+        screen.getByRole("progressbar", {
+          name: "安装进度",
+        }) as HTMLProgressElement
+      ).value,
+    ).toBe(50);
+    expect(screen.getByText("1.0 KB/s")).toBeTruthy();
+    expect(api.cancelInstall).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "取消任务" }));
+    await screen.findByText("已取消");
+    expect(api.cancelInstall).toHaveBeenCalledWith("test-task");
+  });
+
+  it("refreshes installed games when a task finishes while on another page", async () => {
+    vi.mocked(api.installStatus).mockResolvedValue({
+      task: { ...installTask, state: "downloading" },
+    });
+    render(<App />);
+    await screen.findByRole("button", { name: game.title });
+    expect(screen.queryByText("正在下载")).toBeNull();
+    expect(await screen.findByLabelText("1 个进行中的任务")).toBeTruthy();
+    vi.mocked(api.installStatus).mockResolvedValue({
+      task: { ...installTask, state: "completed", progress: 100 },
+    });
+    await waitFor(() => expect(api.installed).toHaveBeenCalledTimes(2), {
+      timeout: 2500,
+    });
+    expect(
+      screen.getByRole("heading", { name: "游戏库", level: 1 }),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("1 个进行中的任务")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "下载管理" }));
+    expect(screen.getByText("安装完成")).toBeTruthy();
+  });
+
   it("requires a reviewed plan before downloading and refreshes installations after completion", async () => {
     vi.mocked(api.prepareInstall).mockImplementation(async () => {
       vi.mocked(api.installStatus).mockResolvedValue({ task: installTask });

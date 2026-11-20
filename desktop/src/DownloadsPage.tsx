@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ArrowDownToLine,
   Check,
+  Clock3,
   FolderOpen,
+  Library,
   LoaderCircle,
   X,
 } from "lucide-react";
 import { api, desktopAvailable, errorMessage, type InstallTask } from "./api";
 import type { Game } from "./library";
-import Modal from "./Modal";
 
 export function bytes(value: number): string {
   if (value < 1024) return `${Math.round(value)} B`;
@@ -29,17 +30,21 @@ const labels: Record<InstallTask["state"], string> = {
 const terminal = (task: InstallTask) =>
   ["completed", "cancelled", "failed"].includes(task.state);
 
-export default function InstallPanel({
+export default function DownloadsPage({
+  visible,
   game,
   operation,
   onClose,
   onInstalled,
+  onBrowseLibrary,
   onActiveChange,
 }: {
+  visible: boolean;
   game: Game | null;
   operation: "install" | "import";
   onClose: () => void;
   onInstalled: () => void;
+  onBrowseLibrary: () => void;
   onActiveChange: (active: boolean) => void;
 }) {
   const [task, setTask] = useState<InstallTask | null>(null);
@@ -48,8 +53,6 @@ export default function InstallPanel({
   const [updating, setUpdating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [review, setReview] = useState(false);
-  const state = useRef<string | null>(null);
   const completed = useRef<string | null>(null);
   const onInstalledRef = useRef(onInstalled);
   onInstalledRef.current = onInstalled;
@@ -59,9 +62,6 @@ export default function InstallPanel({
   }, [task?.state, onActiveChange]);
 
   function accept(next: InstallTask | null) {
-    if (next?.state === "ready" && state.current !== `${next.id}:ready`)
-      setReview(true);
-    state.current = next ? `${next.id}:${next.state}` : null;
     setTask(next);
     if (next?.state === "completed" && completed.current !== next.id) {
       completed.current = next.id;
@@ -102,7 +102,11 @@ export default function InstallPanel({
       )
       .then((options) => {
         if (!stopped) {
-          setPath(operation === "import" && !options.updating ? "" : options.installPath);
+          setPath(
+            operation === "import" && !options.updating
+              ? ""
+              : options.installPath,
+          );
           setPlatform(options.platform);
           setUpdating(options.updating);
         }
@@ -125,9 +129,11 @@ export default function InstallPanel({
     setError(null);
     try {
       accept(
-        (await (operation === "import" ? api.prepareImport : api.prepareInstall)(
-          game.appName, platform, path.trim(),
-        )).task,
+        (
+          await (
+            operation === "import" ? api.prepareImport : api.prepareInstall
+          )(game.appName, platform, path.trim())
+        ).task,
       );
       onClose();
     } catch (error) {
@@ -149,7 +155,6 @@ export default function InstallPanel({
             : api.cancelInstall(task.id))
         ).task,
       );
-      setReview(false);
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -169,9 +174,14 @@ export default function InstallPanel({
     }
   }
 
+  // Keep polling when browsing other pages, without rendering task controls there.
+  if (!visible) return null;
+
   const failure =
     error ||
-    (task?.state === "failed" && task.error ? errorMessage(task.error) : null);
+    (!game && task?.state === "failed" && task.error
+      ? errorMessage(task.error)
+      : null);
   const feedback = failure && (
     <div role="alert" className="feedback error">
       {failure}
@@ -180,19 +190,42 @@ export default function InstallPanel({
   const importing = operation === "import";
   const taskImporting = task?.operation === "import";
   const taskLabel = taskImporting
-    ? { ...labels, preparing: "正在准备导入", completed: "导入完成", failed: "导入失败" }[task!.state]
-    : task ? labels[task.state] : "";
+    ? {
+        ...labels,
+        preparing: "正在准备导入",
+        completed: "导入完成",
+        failed: "导入失败",
+      }[task!.state]
+    : task
+      ? labels[task.state]
+      : "";
   return (
-    <>
-      {!game && !review && feedback}
-      {task && (
-        <section className="download-panel" aria-label={taskImporting ? "导入任务" : "安装任务"}>
+    <div className="downloads-page">
+      {feedback}
+      {!game && !task && !failure && (
+        <div className="empty-state downloads-empty">
+          <ArrowDownToLine size={35} strokeWidth={1.2} />
+          <h2>暂无下载任务</h2>
+          <p>从游戏库选择游戏，即可在这里安装、更新或导入已有游戏。</p>
+          <button className="button primary" onClick={onBrowseLibrary}>
+            <Library size={17} />
+            前往游戏库
+          </button>
+        </div>
+      )}
+      {task && !game && (
+        <section
+          className="download-panel"
+          aria-label={taskImporting ? "导入任务" : "安装任务"}
+        >
           <div className="download-heading">
             <div>
               <span className="detail-label">{taskLabel}</span>
-              <h3>{task.title}</h3>
+              <h2>{task.title}</h2>
             </div>
-            {task.state === "completed" ? (
+            {task.state === "ready" ? (
+              <Clock3 size={22} />
+            ) : task.state === "completed" ? (
               <Check size={22} />
             ) : terminal(task) ? (
               <ArrowDownToLine size={22} />
@@ -200,35 +233,36 @@ export default function InstallPanel({
               <LoaderCircle size={22} className="spin" />
             )}
           </div>
-          <progress
-            aria-label={task.state === "verifying" ? "校验进度" : "安装进度"}
-            max={100}
-            value={Math.min(100, Math.max(0, task.progress))}
-          />
-          <div className="download-stats">
-            <span>{task.progress.toFixed(1)}%</span>
-            {task.state === "downloading" && (
-              <>
-                <span>{bytes(task.downloadSpeed)}/s</span>
-                <span>
-                  {bytes(task.downloadedBytes)} /{" "}
-                  {bytes(task.plan?.downloadSize ?? 0)}
-                </span>
-                {task.etaSeconds != null && (
-                  <span>剩余约 {Math.ceil(task.etaSeconds / 60)} 分钟</span>
+          {task.state !== "ready" && (
+            <>
+              <progress
+                aria-label={
+                  task.state === "verifying" ? "校验进度" : "安装进度"
+                }
+                max={100}
+                value={Math.min(100, Math.max(0, task.progress))}
+              />
+              <div className="download-stats">
+                <span>{task.progress.toFixed(1)}%</span>
+                {task.state === "downloading" && (
+                  <>
+                    <span>{bytes(task.downloadSpeed)}/s</span>
+                    <span>
+                      {bytes(task.downloadedBytes)} /{" "}
+                      {bytes(task.plan?.downloadSize ?? 0)}
+                    </span>
+                    {task.etaSeconds != null && (
+                      <span>剩余约 {Math.ceil(task.etaSeconds / 60)} 分钟</span>
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </div>
-          {task.plan && (
-            <p className="download-path">{task.plan.installPath}</p>
+              </div>
+              {task.plan && (
+                <p className="download-path">{task.plan.installPath}</p>
+              )}
+            </>
           )}
-          {task.state === "ready" && (
-            <button className="button primary" onClick={() => setReview(true)}>
-              {taskImporting ? "查看导入结果" : "查看安装计划"}
-            </button>
-          )}
-          {!terminal(task) && (
+          {!terminal(task) && task.state !== "ready" && (
             <button
               className="button secondary"
               disabled={busy || task.state === "cancelling"}
@@ -240,12 +274,16 @@ export default function InstallPanel({
           )}
           {task.state === "cancelled" && (
             <p className="field-hint">
-              {taskImporting ? "导入已取消，原有游戏文件与安装记录已保留。" : "已保留完成的文件。再次选择同一目录安装，即可续传。"}
+              {taskImporting
+                ? "导入已取消，原有游戏文件与安装记录已保留。"
+                : "已保留完成的文件。再次选择同一目录安装，即可续传。"}
             </p>
           )}
           {task.state === "failed" && (
             <p className="field-hint">
-              {taskImporting ? "从游戏库重新打开导入，检查目录后可重试。" : "从游戏库重新打开安装，选择同一目录可重试。"}
+              {taskImporting
+                ? "从游戏库重新打开导入，检查目录后可重试。"
+                : "从游戏库重新打开安装，选择同一目录可重试或续传。"}
             </p>
           )}
           {task.prerequisite && (
@@ -254,17 +292,37 @@ export default function InstallPanel({
               。请在游戏目录中完成安装后启动。
             </p>
           )}
+          {terminal(task) && (
+            <button className="button secondary" onClick={onBrowseLibrary}>
+              <Library size={16} />
+              前往游戏库
+            </button>
+          )}
         </section>
       )}
       {game && (
-        <Modal
-          title={`${importing ? "导入" : updating ? "更新" : "安装"} ${game.title}`}
-          onClose={onClose}
+        <section
+          className="download-panel download-setup"
+          aria-labelledby="download-setup-title"
         >
-          {feedback}
+          <div className="download-heading">
+            <div>
+              <span className="detail-label">
+                {importing
+                  ? "导入已有游戏"
+                  : updating
+                    ? "更新游戏"
+                    : "新建安装"}
+              </span>
+              <h2 id="download-setup-title">{`${importing ? "导入" : updating ? "更新" : "安装"} ${game.title}`}</h2>
+            </div>
+            <FolderOpen size={24} />
+          </div>
           <form onSubmit={(event) => void prepare(event)}>
             <p className="modal-description">
-              {importing ? "选择已有游戏的根目录，校验通过后确认导入。支持重装系统后恢复游戏或重新关联目录。" : "先检查下载大小与可用空间，确认后开始。支持中断后使用同一目录续传。"}
+              {importing
+                ? "选择已有游戏的根目录，校验通过后确认导入。支持重装系统后恢复游戏或重新关联目录。"
+                : "先检查下载大小与可用空间，确认后开始。支持中断后使用同一目录续传。"}
             </p>
             <label className="field-label" htmlFor="install-path">
               {importing ? "已有游戏目录" : "游戏安装目录"}
@@ -288,40 +346,63 @@ export default function InstallPanel({
               </button>
             </div>
             <p className="field-hint">
-              {importing ? `平台：${platform}。请选择此游戏的专用目录，游戏文件会完整保留。` : `游戏文件会直接写入此目录。平台：${platform}。首次安装请选择空目录。`}
+              {importing
+                ? `平台：${platform}。请选择此游戏的专用目录，游戏文件会完整保留。`
+                : `游戏文件会直接写入此目录。平台：${platform}。首次安装请选择空目录。`}
             </p>
-            <button
-              className="button primary full-width"
-              disabled={busy || !path.trim() || (!!task && !terminal(task))}
-            >
-              {busy ? (
-                <LoaderCircle className="spin" size={17} />
-              ) : (
-                <ArrowDownToLine size={17} />
-              )}
-              {importing ? "检查已有文件" : "检查安装"}
-            </button>
+            <div className="download-actions">
+              <button
+                className="button primary"
+                disabled={busy || !path.trim() || (!!task && !terminal(task))}
+              >
+                {busy ? (
+                  <LoaderCircle className="spin" size={17} />
+                ) : (
+                  <ArrowDownToLine size={17} />
+                )}
+                {importing ? "检查已有文件" : "检查安装"}
+              </button>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={busy}
+                onClick={onClose}
+              >
+                取消设置
+              </button>
+            </div>
           </form>
-        </Modal>
+        </section>
       )}
-      {review && task?.plan && (
-        <Modal
-          title={`确认${taskImporting ? "导入" : "安装"} ${task.title}`}
-          onClose={() => setReview(false)}
+      {!game && task?.state === "ready" && task.plan && (
+        <section
+          className="download-panel download-review"
+          aria-labelledby="download-review-title"
         >
-          {feedback}
+          <h2 id="download-review-title">{`确认${taskImporting ? "导入" : "安装"} ${task.title}`}</h2>
           <dl className="install-summary">
             <dt>安装目录</dt>
             <dd>{task.plan.installPath}</dd>
-            {taskImporting && task.plan.previousPath && task.plan.previousPath !== task.plan.installPath && (
-              <><dt>原安装目录</dt><dd>{task.plan.previousPath}</dd></>
-            )}
+            {taskImporting &&
+              task.plan.previousPath &&
+              task.plan.previousPath !== task.plan.installPath && (
+                <>
+                  <dt>原安装目录</dt>
+                  <dd>{task.plan.previousPath}</dd>
+                </>
+              )}
             {task.plan.importSummary && (
               <>
                 <dt>校验通过</dt>
-                <dd>{task.plan.importSummary.matchedFiles} / {task.plan.importSummary.totalFiles} 个文件</dd>
+                <dd>
+                  {task.plan.importSummary.matchedFiles} /{" "}
+                  {task.plan.importSummary.totalFiles} 个文件
+                </dd>
                 <dt>缺失 / 不匹配</dt>
-                <dd>{task.plan.importSummary.missingFiles} / {task.plan.importSummary.changedFiles} 个文件</dd>
+                <dd>
+                  {task.plan.importSummary.missingFiles} /{" "}
+                  {task.plan.importSummary.changedFiles} 个文件
+                </dd>
               </>
             )}
             <dt>下载大小</dt>
@@ -331,7 +412,10 @@ export default function InstallPanel({
             <dt>需要额外空间</dt>
             <dd>{bytes(task.plan.requiredSpace)}</dd>
             {task.plan.freeSpace != null && (
-              <><dt>可用空间</dt><dd>{bytes(task.plan.freeSpace)}</dd></>
+              <>
+                <dt>可用空间</dt>
+                <dd>{bytes(task.plan.freeSpace)}</dd>
+              </>
             )}
             <dt>版本 / 平台</dt>
             <dd>
@@ -341,7 +425,11 @@ export default function InstallPanel({
           {!!task.plan.importSummary?.problemFiles.length && (
             <div className="install-warnings">
               <h3>未通过校验的文件（最多显示 5 项）</h3>
-              <ul>{task.plan.importSummary.problemFiles.map((file) => <li key={file}>{file}</li>)}</ul>
+              <ul>
+                {task.plan.importSummary.problemFiles.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
             </div>
           )}
           {task.plan.warnings.length > 0 && (
@@ -364,26 +452,37 @@ export default function InstallPanel({
             </div>
           )}
           <p className="field-hint">
-            {taskImporting ? "导入仅登记已校验的游戏，不下载、覆盖或删除文件。缺失或不匹配的文件需先修复，再重新检查。" : "安装游戏本体及全部语言文件。关闭应用会中断任务，下次可续传。"}
+            {taskImporting
+              ? "导入仅登记已校验的游戏，不下载、覆盖或删除文件。缺失或不匹配的文件需先修复，再重新检查。"
+              : "安装游戏本体及全部语言文件。关闭应用会中断任务，下次可续传。"}
           </p>
-          <button
-            className="button primary full-width"
-            disabled={
-              busy || task.state !== "ready" || task.plan.failures.length > 0
-            }
-            onClick={() => void command("start")}
-          >
-            {taskImporting ? "确认导入" : `确认并开始${task.plan.updating ? "更新" : "安装"}`}
-          </button>
-          <button
-            className="button secondary full-width update-button"
-            disabled={busy}
-            onClick={() => void command("cancel")}
-          >
-            取消此计划
-          </button>
-        </Modal>
+          <div className="download-actions">
+            <button
+              className="button primary"
+              disabled={
+                busy || task.state !== "ready" || task.plan.failures.length > 0
+              }
+              onClick={() => void command("start")}
+            >
+              {taskImporting
+                ? "确认导入"
+                : `确认并开始${task.plan.updating ? "更新" : "安装"}`}
+            </button>
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={() => void command("cancel")}
+            >
+              取消此计划
+            </button>
+          </div>
+        </section>
       )}
-    </>
+      {(game || task) && (
+        <p className="downloads-note">
+          一次处理一个任务。切换页面会继续当前任务；关闭应用会中断任务，下载可使用同一目录续传。
+        </p>
+      )}
+    </div>
   );
 }

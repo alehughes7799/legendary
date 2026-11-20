@@ -8,11 +8,15 @@ remain CLI operations.
 
 ## Installing games
 
-Select a game, choose its dedicated installation directory, and check the plan.
+Select a game's install/update action to open the dedicated **下载管理** page,
+choose its installation directory, and check the plan.
 The plan shows download/install sizes, required/free space, warnings, and blocking
 conditions. Downloads start only after confirmation. The download panel shows
-progress, transfer speed, and estimated remaining time; it remains available
-while browsing the app. Installed games also offer an update/resume action.
+progress, transfer speed, and estimated remaining time. Directory selection,
+plan confirmation, cancellation, and import verification all stay on this page.
+Use the **下载管理** sidebar entry to return to it; active tasks continue when
+browsing other pages and update the installed library on completion. Installed
+games also offer an update/resume action.
 
 One installation runs at a time. Cancel to retain completed files, then prepare
 the same game in the same directory to resume. Exiting the app interrupts the
@@ -155,7 +159,7 @@ Signing, notarization, and automatic updates require release configuration.
 
 ## Initial validation
 
-The implementation has 43 Python tests, 17 frontend tests, and 4 Rust
+The implementation has 43 Python tests, 21 frontend tests, and 4 Rust
 transport tests. Python process tests can also run against the frozen executable
 by setting `LEGENDARY_TEST_BRIDGE` to its absolute path. They cover IPC framing,
 external CLI state changes, and an isolated native test process that continues

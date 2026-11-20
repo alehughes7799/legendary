@@ -31,9 +31,9 @@ import {
 } from "./api";
 import { formatSize, mergeLibrary, type Game } from "./library";
 import Modal from "./Modal";
-import InstallPanel from "./InstallPanel";
+import DownloadsPage from "./DownloadsPage";
 
-type Page = "library" | "installed" | "settings";
+type Page = "library" | "installed" | "downloads" | "settings";
 const initialAuth: AuthStatus = {
   hasCredentials: false,
   displayName: null,
@@ -78,7 +78,9 @@ export default function App() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [code, setCode] = useState("");
   const [installGame, setInstallGame] = useState<Game | null>(null);
-  const [installOperation, setInstallOperation] = useState<"install" | "import">("install");
+  const [installOperation, setInstallOperation] = useState<
+    "install" | "import"
+  >("install");
   const [installationActive, setInstallationActive] = useState(false);
   const [selected, setSelected] = useState<Game | null>(null);
   const [offline, setOffline] = useState(false);
@@ -193,6 +195,13 @@ export default function App() {
     setOffline(false);
     setSkipVersionCheck(false);
   }
+
+  function openInstallation(game: Game, operation: "install" | "import") {
+    setInstallOperation(operation);
+    setInstallGame(game);
+    setSelected(null);
+    setPage("downloads");
+  }
   async function openLoginPage() {
     try {
       await api.openLogin();
@@ -267,6 +276,19 @@ export default function App() {
             已安装<span className="nav-count">{installed.length}</span>
           </button>
           <button
+            className={page === "downloads" ? "nav-item active" : "nav-item"}
+            aria-current={page === "downloads" ? "page" : undefined}
+            onClick={() => setPage("downloads")}
+          >
+            <ArrowDownToLine size={19} />
+            下载管理
+            {installationActive && (
+              <span className="nav-count" aria-label="1 个进行中的任务">
+                1
+              </span>
+            )}
+          </button>
+          <button
             className={page === "settings" ? "nav-item active" : "nav-item"}
             onClick={() => setPage("settings")}
           >
@@ -315,40 +337,44 @@ export default function App() {
           </div>
         </header>
         <div className="content">
-          <InstallPanel
-            game={installGame}
-            operation={installOperation}
-            onClose={() => setInstallGame(null)}
-            onActiveChange={setInstallationActive}
-            onInstalled={() => {
-              void api
-                .installed()
-                .then((local) => setInstalled(local.games))
-                .catch((error) => setError(errorMessage(error)));
-            }}
-          />
-
           <div className="page-heading">
             <div>
               <div className="eyebrow">
-                {page === "settings" ? "MAKE IT YOURS" : "ALL YOUR ADVENTURES"}
+                {page === "settings"
+                  ? "MAKE IT YOURS"
+                  : page === "downloads"
+                    ? "READY FOR YOUR NEXT ADVENTURE"
+                    : "ALL YOUR ADVENTURES"}
               </div>
               <h1>
                 {page === "library"
                   ? "游戏库"
                   : page === "installed"
                     ? "已安装的游戏"
-                    : "设置"}
+                    : page === "downloads"
+                      ? "下载管理"
+                      : "设置"}
               </h1>
               <p>
                 {page === "settings"
                   ? "管理账户与启动方式。"
                   : page === "installed"
                     ? "准备就绪，随时出发。"
-                    : "把喜爱的世界，收藏在同一个地方。"}
+                    : page === "downloads"
+                      ? "管理游戏的下载、安装、更新与导入。"
+                      : "把喜爱的世界，收藏在同一个地方。"}
               </p>
             </div>
-            {page !== "settings" && (
+            {page === "downloads" && (
+              <button
+                className="button secondary"
+                onClick={() => setPage("library")}
+              >
+                <Library size={16} />
+                返回游戏库
+              </button>
+            )}
+            {(page === "library" || page === "installed") && (
               <button
                 className="button secondary"
                 onClick={() => void refresh(platform, true)}
@@ -370,7 +396,22 @@ export default function App() {
             </div>
           )}
 
-          {page === "settings" ? (
+          <DownloadsPage
+            visible={page === "downloads"}
+            game={installGame}
+            operation={installOperation}
+            onClose={() => setInstallGame(null)}
+            onBrowseLibrary={() => setPage("library")}
+            onActiveChange={setInstallationActive}
+            onInstalled={() => {
+              void api
+                .installed()
+                .then((local) => setInstalled(local.games))
+                .catch((error) => setError(errorMessage(error)));
+            }}
+          />
+
+          {page === "downloads" ? null : page === "settings" ? (
             <div className="settings-grid">
               <section className="panel">
                 <div className="panel-icon">
@@ -726,11 +767,7 @@ export default function App() {
               <button
                 className="button secondary full-width update-button"
                 disabled={!!busy || installationActive || !auth.hasCredentials}
-                onClick={() => {
-                  setInstallOperation("install");
-                  setInstallGame(selected);
-                  setSelected(null);
-                }}
+                onClick={() => openInstallation(selected, "install")}
               >
                 <ArrowDownToLine size={17} />
                 检查更新 / 续传
@@ -740,11 +777,7 @@ export default function App() {
             <button
               className="button primary full-width"
               disabled={!!busy || installationActive || !auth.hasCredentials}
-              onClick={() => {
-                setInstallOperation("install");
-                setInstallGame(selected);
-                setSelected(null);
-              }}
+              onClick={() => openInstallation(selected, "install")}
             >
               <ArrowDownToLine size={18} />
               安装游戏
@@ -753,11 +786,7 @@ export default function App() {
           <button
             className="button secondary full-width update-button"
             disabled={!!busy || installationActive || !auth.hasCredentials}
-            onClick={() => {
-              setInstallOperation("import");
-              setInstallGame(selected);
-              setSelected(null);
-            }}
+            onClick={() => openInstallation(selected, "import")}
           >
             <FolderOpen size={17} />
             {selected.installation ? "重新关联目录" : "导入已有游戏"}

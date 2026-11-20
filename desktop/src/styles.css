@@ -838,16 +838,32 @@ textarea {
   justify-content: space-between;
   color: #bda4ed;
 }
-.download-heading h3 {
+.download-heading h2 {
   margin: 9px 0 16px;
   color: #efedf5;
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 500;
 }
 .download-panel progress {
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
   height: 9px;
+  overflow: hidden;
+  border: 0;
+  background: #34313e;
   accent-color: #b49af0;
+  border-radius: 8px;
+}
+.download-panel progress::-webkit-progress-bar {
+  background: #34313e;
+}
+.download-panel progress::-webkit-progress-value {
+  background: #b49af0;
+  border-radius: 8px;
+}
+.download-panel progress::-moz-progress-bar {
+  background: #b49af0;
   border-radius: 8px;
 }
 .download-stats {
@@ -866,6 +882,51 @@ textarea {
 .download-panel .button {
   margin-right: 10px;
   margin-top: 8px;
+}
+.downloads-page {
+  max-width: 960px;
+  min-height: 420px;
+}
+.downloads-empty {
+  border: 1px dashed #34313e;
+  border-radius: 12px;
+  background: #16171d;
+}
+.downloads-empty h2 {
+  color: #e3dce9;
+  font-size: 18px;
+  font-weight: 500;
+  margin: 20px 0 0;
+}
+.downloads-empty .button {
+  margin-top: 20px;
+}
+.download-setup .modal-description {
+  margin-bottom: 24px;
+}
+.download-review h2 {
+  margin: 0 0 24px;
+  font-size: 18px;
+  font-weight: 500;
+}
+.download-review .install-summary {
+  grid-template-columns: 130px 1fr;
+  font-size: 13px;
+  gap: 14px 24px;
+}
+.download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+.download-actions .button {
+  margin: 0;
+}
+.downloads-note {
+  color: #9690a4;
+  font-size: 12px;
+  line-height: 1.8;
 }
 .path-field {
   display: flex;
